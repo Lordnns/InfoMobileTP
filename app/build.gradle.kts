@@ -40,7 +40,7 @@ android {
     }
     
     composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.10" // ✅ Match this with your Compose version
+        kotlinCompilerExtensionVersion = "1.5.10" // Match this with your Compose version
     }
 }
 
