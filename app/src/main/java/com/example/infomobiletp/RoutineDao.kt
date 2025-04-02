@@ -8,7 +8,7 @@ interface RoutineDao {
     fun getAll(): List<Routine>
 
     @Insert
-    fun insert(routine: Routine)
+    fun insert(routine: Routine): Long
 
     @Delete
     fun delete(routine: Routine)

@@ -46,9 +46,21 @@ android {
 
 dependencies {
 
+    implementation(libs.androidx.material3.v110)
+
+    implementation(libs.androidx.foundation)
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
+    implementation(libs.androidx.foundation.android)
+    implementation(libs.androidx.foundation.android)
+    implementation(libs.androidx.foundation.android)
+    implementation(libs.androidx.foundation.android)
+    implementation(libs.androidx.foundation.android)
+    implementation(libs.androidx.foundation.android)
+    implementation(libs.androidx.foundation.android)
+    implementation(libs.protolite.well.known.types)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
@@ -80,4 +92,6 @@ dependencies {
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+
+    implementation(libs.gson)
 }
