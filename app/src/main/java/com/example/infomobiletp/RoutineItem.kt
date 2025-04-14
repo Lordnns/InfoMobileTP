@@ -13,6 +13,17 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.Alignment
 import androidx.compose.material3.Button
 
+// Helper function to generate a notification summary.
+fun getNotificationSummary(nt: NotificationTime): String {
+    return when (nt.triggerType) {
+        TriggerType.TIME -> nt.time + if (nt.message.isNotEmpty()) " (${nt.message})" else ""
+        TriggerType.BATTERY -> "Batterie: ${nt.batteryLevel ?: "N/A"}%" +
+                if (nt.message.isNotEmpty()) " (${nt.message})" else ""
+        TriggerType.LOCATION -> "Localisation: ${nt.location ?: "N/A"} (Rayon: ${nt.locationRadius ?: "N/A"} m)" +
+                if (nt.message.isNotEmpty()) " (${nt.message})" else ""
+    }
+}
+
 @Composable
 fun RoutineItem(
     routine: Routine,
@@ -38,13 +49,13 @@ fun RoutineItem(
                 if (routine.notificationTimes.isNotEmpty()) {
                     Text(
                         text = routine.notificationTimes.joinToString(separator = ", ") { nt ->
-                            "${nt.time} ${if (nt.message.isNotEmpty()) "(${nt.message})" else ""}"
+                            getNotificationSummary(nt)
                         },
                         fontSize = 14.sp,
                         color = Color.Gray
                     )
                 } else {
-                    Text(text = "Aucun Temp de Notification", fontSize = 14.sp, color = Color.Gray)
+                    Text(text = "Aucune Notification", fontSize = 14.sp, color = Color.Gray)
                 }
             }
             // Toggle button to enable/disable notifications

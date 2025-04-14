@@ -2,28 +2,25 @@ package com.example.infomobiletp
 
 import android.annotation.SuppressLint
 import android.app.DatePickerDialog
-import android.widget.ToggleButton
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material3.Button
-import androidx.compose.material3.Text
-import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
-import androidx.compose.material3.RadioButton
-import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.modifier.modifierLocalMapOf
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -44,9 +41,18 @@ fun AddRoutineScreen(viewModel: RoutineViewModel) {
     var priority by remember { mutableStateOf(Priority.MEDIUM) }
     val notificationTimes = remember { mutableStateListOf<NotificationTime>() }
     var isAdding by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+    var showDatePicker by remember { mutableStateOf(false) }
+    var showEndDatePicker by remember { mutableStateOf(false) }
+    var autoOpenIndex by remember { mutableStateOf<Int?>(null) }
 
-    // Manage the list of categories (persisted via Room or SharedPreferences)
-    var categories by remember { mutableStateOf(listOf("None", "Work", "Leisure", "Health")) }
+    // Variables for adding notification dialogs.
+    var showAddNotificationDialog by remember { mutableStateOf(false) }
+    var showTimeAddDialog by remember { mutableStateOf(false) }
+    var showBatteryAddDialog by remember { mutableStateOf(false) }
+    var showLocationAddDialog by remember { mutableStateOf(false) }
+    var selectedNewType by remember { mutableStateOf(TriggerType.TIME) }
 
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
@@ -72,28 +78,74 @@ fun AddRoutineScreen(viewModel: RoutineViewModel) {
                 innerTextField()
             }
         )
-        // Category dropdown for selecting category.
         CategoryDropdown(
             selectedCategory = category,
             onCategorySelected = { category = it },
         )
-
         RecurrenceDropdown(
             selectedRecurrence = recurrenceType,
             onRecurrenceSelected = { recurrenceType = it }
         )
-
-        // Day selection remains as before.
         Column {
             Text("Sélection de journée(s):")
             DaySelector(selectedDays = selectedDays, onSelectionChange = { selectedDays = it })
         }
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Start and End Dates (for simplicity, displayed as text; a DatePicker can be integrated)
-        //Text("Début: ${dateFormat.format(Date(startDate))}")
-        //Text("Fin: ${endDate?.let { dateFormat.format(Date(it)) } ?: "Indéfini"}")
-        // Priority selection (radio buttons)
+        // Date selection button with a DatePickerDialog.
+        Button(
+            onClick = { showDatePicker = true },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Début: " + dateFormat.format(Date(startDate)))
+        }
+        if (showDatePicker) {
+            DatePickerDialog(
+                context,
+                { _, year, month, dayOfMonth ->
+                    val newCalendar = Calendar.getInstance().apply { set(year, month, dayOfMonth) }
+                    startDate = newCalendar.timeInMillis
+                    showDatePicker = false
+                },
+                Calendar.getInstance().get(Calendar.YEAR),
+                Calendar.getInstance().get(Calendar.MONTH),
+                Calendar.getInstance().get(Calendar.DAY_OF_MONTH)
+            ).show()
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        // End date selection:
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Button(
+                onClick = { showEndDatePicker = true },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Fin: " + (endDate?.let { dateFormat.format(Date(it)) } ?: "Aucune"))
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Button(
+                onClick = { endDate = null },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Effacer Fin")
+            }
+        }
+        if (showEndDatePicker) {
+            DatePickerDialog(
+                context,
+                { _, year, month, dayOfMonth ->
+                    val newCalendar = Calendar.getInstance().apply { set(year, month, dayOfMonth) }
+                    endDate = newCalendar.timeInMillis
+                    showEndDatePicker = false
+                },
+                Calendar.getInstance().get(Calendar.YEAR),
+                Calendar.getInstance().get(Calendar.MONTH),
+                Calendar.getInstance().get(Calendar.DAY_OF_MONTH)
+            ).show()
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         Text(
             text = "Priorité:",
             modifier = Modifier.fillMaxWidth(),
@@ -101,8 +153,11 @@ fun AddRoutineScreen(viewModel: RoutineViewModel) {
         )
         Row {
             Priority.values().forEach { prio ->
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(4.dp)) {
-                    RadioButton(
+                Row(
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    modifier = Modifier.padding(4.dp)
+                ) {
+                    androidx.compose.material3.RadioButton(
                         selected = (priority == prio),
                         onClick = { priority = prio }
                     )
@@ -111,26 +166,42 @@ fun AddRoutineScreen(viewModel: RoutineViewModel) {
             }
         }
         Spacer(modifier = Modifier.height(16.dp))
-        // Notification Times editing section
+        // Notifications editing section.
         Column(modifier = Modifier.fillMaxWidth()) {
-            Text("Temps de Notification:", fontSize = 16.sp)
+            Text("Modifier Notification(s):", fontSize = 16.sp)
             notificationTimes.forEachIndexed { index, nt ->
                 NotificationTimeItem(
                     initialTime = nt.time,
                     initialMessage = nt.message,
-                    onUpdate = { newTime, newMessage ->
-                        notificationTimes[index] = nt.copy(time = newTime, message = newMessage)
+                    initialTrigger = nt.triggerType, // Pass the current trigger so the dialog shows the correct selection
+                    initialBatteryLevel = nt.batteryLevel,
+                    initialLocation = nt.location ?: "",            // Use the location field here.
+                    initialLocationRadius = nt.locationRadius,
+                    initiallyOpen = (autoOpenIndex == index),
+                    onUpdate = { newTime, newMessage, newTrigger, newBattery, newLocation, newRadius ->
+                        notificationTimes[index] = nt.copy(
+                            time = newTime,
+                            message = newMessage,
+                            triggerType = newTrigger,
+                            batteryLevel = newBattery,
+                            location = newLocation,
+                            locationRadius = newRadius
+                        )
                     },
                     onDelete = {
                         notificationTimes.removeAt(index)
+                    },
+                    onDialogDismiss = {
+                        if (autoOpenIndex == index) autoOpenIndex = null
                     }
                 )
             }
-            Button(
-                onClick = {
-                    notificationTimes.add(NotificationTime("07:00", enabled = true, message = ""))
-                }
-            ) {
+            // Simply add a default notification item when the button is pressed.
+            Button(onClick = {
+                val newIndex = notificationTimes.size
+                notificationTimes.add(NotificationTime())
+                autoOpenIndex = newIndex
+            }) {
                 Text("Ajouter Notification")
             }
         }
@@ -165,6 +236,7 @@ fun AddRoutineScreen(viewModel: RoutineViewModel) {
         }
     }
 }
+
 
 @Composable
 fun DateInputField(

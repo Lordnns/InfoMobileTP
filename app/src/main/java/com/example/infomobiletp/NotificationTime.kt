@@ -1,9 +1,19 @@
 package com.example.infomobiletp
 
+enum class TriggerType {
+    TIME,
+    BATTERY,
+    LOCATION
+}
+
 data class NotificationTime(
-    val time: String,      // Format "HH:mm", par ex. "07:00"
+    val time: String = "07:00",      // Format "HH:mm", ex: "07:00"
     val enabled: Boolean = true,
-    val message: String = "" // Message personnalisé, par exemple "N'oublie pas de déjeuner"
+    val message: String = "",         // Custom message (e.g., "N'oublie pas de déjeuner")
+    val triggerType: TriggerType = TriggerType.TIME, // New trigger type field
+    val batteryLevel: Int? = null,    // Battery threshold (if triggerType is BATTERY)
+    val location: String? = null,     // Location trigger data (if triggerType is LOCATION)
+    val locationRadius: Int? = null
 )
 
 enum class RecurrenceType {

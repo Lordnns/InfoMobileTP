@@ -46,6 +46,13 @@ android {
 
 dependencies {
 
+    implementation (libs.accompanist.permissions)
+
+    implementation (libs.jetbrains.kotlinx.coroutines.play.services)
+    implementation (libs.android.sdk)
+
+    implementation(libs.osmdroid.android)
+
     implementation(libs.androidx.material3.v110)
 
     implementation(libs.androidx.foundation)
@@ -61,6 +68,7 @@ dependencies {
     implementation(libs.androidx.foundation.android)
     implementation(libs.androidx.foundation.android)
     implementation(libs.protolite.well.known.types)
+    implementation(libs.play.services.location)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

@@ -1,5 +1,6 @@
 package com.example.infomobiletp
 
+import android.annotation.SuppressLint
 import android.util.Log
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -9,6 +10,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -18,6 +20,19 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+
+@Composable
+fun BatteryLevelPicker(value: Int, range: IntRange, onValueChange: (Int) -> Unit) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Button(onClick = { if (value < range.last) onValueChange(value + 1) }) {
+            Text("▲")
+        }
+        Text("$value", fontSize = 20.sp)
+        Button(onClick = { if (value > range.first) onValueChange(value - 1) }) {
+            Text("▼")
+        }
+    }
+}
 
 @Composable
 fun TimeWheelPickerManual(
@@ -141,46 +156,142 @@ fun TimeWheelPickerManual(
     }
 }
 
+@SuppressLint("DefaultLocale")
 @Composable
 fun NotificationTimeItem(
-    initialTime: String,
-    initialMessage: String,
-    onUpdate: (newTime: String, newMessage: String) -> Unit,
-    onDelete: () -> Unit
+    initialTime: String,                // Expected in format "HH:mm"
+    initialMessage: String,             // Used for TIME and BATTERY triggers.
+    initialTrigger: TriggerType,
+    initialBatteryLevel: Int? = null,     // For BATTERY trigger.
+    initialLocation: String = "",         // For LOCATION trigger.
+    initialLocationRadius: Int? = null,     // For LOCATION trigger.
+    initiallyOpen: Boolean = false,
+    onUpdate: (newTime: String, newMessage: String, newTrigger: TriggerType, newBatteryLevel: Int?, newLocation: String, newLocationRadius: Int?) -> Unit,
+    onDelete: () -> Unit,
+    onDialogDismiss: () -> Unit = {}
 ) {
-    var showDialog by remember { mutableStateOf(false) }
-    // Parse initial time "HH:mm" into hour and minute, defaulting to 0 if parsing fails.
-    var selectedHour by remember { mutableStateOf(initialTime.substringBefore(":").toIntOrNull() ?: 0) }
-    var selectedMinute by remember { mutableStateOf(initialTime.substringAfter(":").toIntOrNull() ?: 0) }
-    var message by remember { mutableStateOf(initialMessage) }
+    var showDialog by remember { mutableStateOf(initiallyOpen) }
+    var showMapDialog by remember { mutableStateOf(false) }
 
-    // Button that displays the current time value
+    // Display summary based on the trigger type:
+    val displayText = when (initialTrigger) {
+        TriggerType.TIME -> initialTime
+        TriggerType.BATTERY -> "Batterie: ${initialBatteryLevel?.toString() ?: "N/A"}%"
+        TriggerType.LOCATION -> "Localisation: ${if (initialLocation.isNotEmpty()) initialLocation else "Choisir Lieu"} (Rayon: ${initialLocationRadius ?: "N/A"} m)"
+    }
+
     Button(
         onClick = { showDialog = true },
         modifier = Modifier.padding(4.dp)
     ) {
-        Text(text = String.format("%02d:%02d", selectedHour, selectedMinute))
+        Text(text = displayText)
     }
 
     if (showDialog) {
+        // Define mutable states for updated values.
+        var selectedTrigger by remember { mutableStateOf(initialTrigger) }
+        var selectedHour by remember { mutableStateOf(initialTime.substringBefore(":").toIntOrNull() ?: 0) }
+        var selectedMinute by remember { mutableStateOf(initialTime.substringAfter(":").toIntOrNull() ?: 0) }
+        var batteryLevel by remember { mutableStateOf(initialBatteryLevel ?: 50) }
+        var locationText by remember { mutableStateOf(initialLocation) }
+        var locationRadius by remember { mutableStateOf(initialLocationRadius ?: 100) }
+        var updatedMessage by remember { mutableStateOf(initialMessage) }
+
         AlertDialog(
-            onDismissRequest = { showDialog = false },
-            title = { Text("Modifié Temp de Notification") },
+            onDismissRequest = {
+                showDialog = false
+                onDialogDismiss()
+            },
+            title = { Text("Modifier Notification") },
             text = {
                 Column {
-                    // The custom wheel picker for time selection
-                    TimeWheelPickerManual(
-                        initialHour = selectedHour,
-                        initialMinute = selectedMinute,
-                        onTimeSelected = { hour, minute ->
-                            selectedHour = hour
-                            selectedMinute = minute
+                    // Row to select trigger type.
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        RadioButton(
+                            selected = selectedTrigger == TriggerType.TIME,
+                            onClick = { selectedTrigger = TriggerType.TIME }
+                        )
+                        Text("Heure")
+                        RadioButton(
+                            selected = selectedTrigger == TriggerType.BATTERY,
+                            onClick = { selectedTrigger = TriggerType.BATTERY }
+                        )
+                        Text("Batterie")
+                        RadioButton(
+                            selected = selectedTrigger == TriggerType.LOCATION,
+                            onClick = { selectedTrigger = TriggerType.LOCATION }
+                        )
+                        Text("Localisation")
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    // Show UI based on the selected trigger.
+                    when (selectedTrigger) {
+                        TriggerType.TIME -> {
+                            TimeWheelPickerManual(
+                                initialHour = selectedHour,
+                                initialMinute = selectedMinute,
+                                onTimeSelected = { hour, minute ->
+                                    selectedHour = hour
+                                    selectedMinute = minute
+                                }
+                            )
                         }
-                    )
+                        TriggerType.BATTERY -> {
+                            Text("Niveau de batterie déclenchement (%)", fontSize = 16.sp)
+                            BatteryLevelPicker(
+                                value = batteryLevel,
+                                range = 1..100,
+                                onValueChange = { batteryLevel = it }
+                            )
+                        }
+                        TriggerType.LOCATION -> {
+                            Column {
+                                Button(onClick = { showMapDialog = true }) {
+                                    Text("Choisir un lieu")
+                                }
+                                if (locationText.isNotEmpty()) {
+                                    Text("Lieu sélectionné: $locationText", fontSize = 14.sp)
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text("Rayon de déclenchement (m)", fontSize = 16.sp)
+                                BatteryLevelPicker(
+                                    value = locationRadius,
+                                    range = 10..1000,
+                                    onValueChange = { locationRadius = it }
+                                )
+                            }
+                            if (showMapDialog) {
+                                AlertDialog(
+                                    onDismissRequest = { showMapDialog = false },
+                                    title = { Text("Sélectionnez une localisation") },
+                                    text = {
+                                        // Integrate MapLibreView for selecting location.
+                                        // Assurez-vous que votre composable MapLibreView est défini dans le projet.
+                                        OSMMapView(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(300.dp)
+                                        ) { lat, lng ->
+                                            locationText = "$lat,$lng"
+                                            showMapDialog = false
+                                        }
+                                    },
+                                    confirmButton = {
+                                        Button(onClick = { showMapDialog = false }) {
+                                            Text("Fermer")
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
-                        value = message,
-                        onValueChange = { message = it },
+                        value = updatedMessage,
+                        onValueChange = { updatedMessage = it },
                         label = { Text("Message de Notification") },
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -188,9 +299,19 @@ fun NotificationTimeItem(
             },
             confirmButton = {
                 Button(onClick = {
-                    // When confirmed, update the notification time using formatted time string "HH:mm"
-                    onUpdate(String.format("%02d:%02d", selectedHour, selectedMinute), message)
+                    val newTime = if (selectedTrigger == TriggerType.TIME)
+                        String.format("%02d:%02d", selectedHour, selectedMinute)
+                    else ""
+                    onUpdate(
+                        newTime,
+                        updatedMessage,
+                        selectedTrigger,
+                        if (selectedTrigger == TriggerType.BATTERY) batteryLevel else null,
+                        if (selectedTrigger == TriggerType.LOCATION) locationText else "",
+                        if (selectedTrigger == TriggerType.LOCATION) locationRadius else null
+                    )
                     showDialog = false
+                    onDialogDismiss()
                 }) {
                     Text("Sauvegarder", fontSize = 14.sp)
                 }
@@ -199,6 +320,7 @@ fun NotificationTimeItem(
                 Button(onClick = {
                     onDelete()
                     showDialog = false
+                    onDialogDismiss()
                 }) {
                     Text("Supprimer", fontSize = 14.sp)
                 }
