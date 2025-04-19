@@ -1,5 +1,6 @@
 package com.example.infomobiletp
 
+import android.Manifest
 import android.app.Application
 import android.content.Context
 import android.content.Intent
@@ -15,6 +16,17 @@ import android.net.Uri
 import android.provider.Settings
 import java.util.Calendar
 import androidx.core.net.toUri
+import android.content.ContentValues
+import android.content.pm.PackageManager
+import android.provider.CalendarContract
+import androidx.core.app.ActivityCompat
+import java.util.TimeZone
+import com.google.android.gms.location.Geofence
+import com.google.android.gms.location.GeofencingRequest
+import com.google.android.gms.location.LocationServices
+import android.content.ContentUris
+
+
 
 class RoutineViewModel(application: Application) : AndroidViewModel(application) {
     private val db = AppDatabase.getDatabase(application)
@@ -78,6 +90,7 @@ class RoutineViewModel(application: Application) : AndroidViewModel(application)
                 val newRoutine = routine.copy(id = newId.toInt())
                 try {
                     scheduleNotifications(newRoutine)
+                    addRoutineToCalendar(newRoutine)
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -92,13 +105,59 @@ class RoutineViewModel(application: Application) : AndroidViewModel(application)
 
     fun deleteRoutine(routine: Routine) {
         viewModelScope.launch(Dispatchers.IO) {
-            try {
-                db.routineDao().delete(routine)
-                scheduleNotifications(routine)
-                loadRoutines()
-            } catch (e: Exception) {
-                e.printStackTrace()
+            val context = getApplication<Application>()
+            val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            val geofencingClient = LocationServices.getGeofencingClient(context)
+
+            // Cancel TIME alarms
+            routine.notificationTimes
+                .filter { it.enabled && it.triggerType == TriggerType.TIME }
+                .forEach { nt ->
+                    val (hour, minute) = nt.time.split(":")
+                        .mapNotNull { it.toIntOrNull() }
+                        .let { if (it.size == 2) it[0] to it[1] else return@forEach }
+                    routine.daysOfWeek.forEach { day ->
+                        val code = routine.id * 10000 + day * 100 + hour * 10 + minute
+                        val pi = PendingIntent.getBroadcast(
+                            context,
+                            code,
+                            Intent(context, NotificationReceiver::class.java),
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                        )
+                        am.cancel(pi)
+                    }
+                }
+
+            // 🗺 Remove geofences (LOCATION triggers)
+            geofencingClient.removeGeofences(listOf(routine.id.toString()))
+
+            // SharedPreferences for cleaning up BATTERY & LOCATION messages
+            val prefs = context.getSharedPreferences("notification_prefs", Context.MODE_PRIVATE)
+
+            // Clear BATTERY prefs
+            prefs.edit()
+                .remove("battery_threshold_${routine.id}")
+                .remove("battery_message_${routine.id}")
+                .apply()
+
+            // Clear LOCATION message prefs
+            prefs.edit()
+                .remove("location_message_${routine.id}")
+                .apply()
+
+            // Remove Calendar event
+            val eventId = prefs.getLong("calendar_event_${routine.id}", -1L)
+            if (eventId != -1L) {
+                context.contentResolver.delete(
+                    ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId),
+                    null, null
+                )
+                prefs.edit().remove("calendar_event_${routine.id}").apply()
             }
+
+            // 🗄 Finally delete from Room & reload list
+            db.routineDao().delete(routine)
+            loadRoutines()
         }
     }
 
@@ -107,6 +166,7 @@ class RoutineViewModel(application: Application) : AndroidViewModel(application)
             try {
                 db.routineDao().update(routine)
                 scheduleNotifications(routine)
+                addRoutineToCalendar(routine)
                 viewModelScope.launch(Dispatchers.Main) {
                     loadRoutines()
                 }
@@ -119,53 +179,119 @@ class RoutineViewModel(application: Application) : AndroidViewModel(application)
     @SuppressLint("ScheduleExactAlarm", "NewApi")
     private fun scheduleNotifications(routine: Routine) {
         val context = getApplication<Application>()
-        val alarmManager = getApplication<Application>().getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val alarmManager =
+            context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val prefs = context.getSharedPreferences("notification_prefs", Context.MODE_PRIVATE)
+        val geofencingClient = LocationServices.getGeofencingClient(context)
 
-        if (!alarmManager.canScheduleExactAlarms()) {
-            // Rediriger l'utilisateur vers les paramètres pour activer l'autorisation
-            val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
-                data = ("package:" + context.packageName).toUri()
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(intent)
-        }
+        // TIME triggers → exact alarms
+        routine.notificationTimes
+            .filter { it.enabled && it.triggerType == TriggerType.TIME }
+            .forEach { nt ->
+                val (hour, minute) = nt.time.split(":")
+                    .mapNotNull { it.toIntOrNull() }
+                    .let { if (it.size == 2) it[0] to it[1] else return@forEach }
 
-        routine.notificationTimes.filter { it.enabled }.forEach { nt ->
-            // Expecting nt.time to be in "HH:mm" format
-            val parts = nt.time.split(":")
-            if (parts.size != 2) return@forEach
-            val hour = parts[0].toIntOrNull() ?: return@forEach
-            val minute = parts[1].toIntOrNull() ?: return@forEach
-
-            for (day in routine.daysOfWeek) {
-                // Build the notification intent with the custom message
-                val notificationIntent = Intent(context, NotificationReceiver::class.java).apply {
-                    putExtra("routineName", routine.name)
-                    putExtra("routineId", routine.id)
-                    putExtra("notificationMessage", nt.message)
-                }
-                // Create a unique request code—for example, combining routine.id, day, hour, and minute
-                val requestCode = routine.id * 10000 + day * 100 + hour * 10 + minute
-                val alarmIntent = PendingIntent.getBroadcast(
-                    context,
-                    requestCode,
-                    notificationIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-
-                val calendar = Calendar.getInstance().apply {
-                    set(Calendar.DAY_OF_WEEK, day)
-                    set(Calendar.HOUR_OF_DAY, hour)
-                    set(Calendar.MINUTE, minute)
-                    set(Calendar.SECOND, 0)
-                    // If the time is already past, move to the next occurrence (e.g., add 7 days)
-                    if (timeInMillis < System.currentTimeMillis()) {
-                        add(Calendar.DAY_OF_YEAR, 7)
+                routine.daysOfWeek.forEach { day ->
+                    val intent = Intent(context, NotificationReceiver::class.java).apply {
+                        putExtra("routineId", routine.id)
+                        putExtra("notificationMessage", nt.message)
                     }
-                }
+                    val requestCode = routine.id * 10000 + day * 100 + hour * 10 + minute
+                    val pi = PendingIntent.getBroadcast(
+                        context, requestCode, intent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
 
-                alarmManager.setExact(AlarmManager.RTC_WAKEUP, calendar.timeInMillis, alarmIntent)
+                    val cal = Calendar.getInstance().apply {
+                        set(Calendar.DAY_OF_WEEK, day)
+                        set(Calendar.HOUR_OF_DAY, hour)
+                        set(Calendar.MINUTE, minute)
+                        set(Calendar.SECOND, 0)
+                        if (timeInMillis < System.currentTimeMillis()) add(Calendar.DAY_OF_YEAR, 7)
+                    }
+                    alarmManager.setExact(AlarmManager.RTC_WAKEUP, cal.timeInMillis, pi)
+                }
+            }
+
+        // BATTERY triggers → store threshold & message in prefs
+        routine.notificationTimes
+            .filter { it.triggerType == TriggerType.BATTERY }
+            .forEach { nt ->
+                prefs.edit()
+                    .putInt("battery_threshold_${routine.id}", nt.batteryLevel ?: 0)
+                    .putString("battery_message_${routine.id}", nt.message)
+                    .apply()
+            }
+
+        // LOCATION triggers → register geofences
+        if (ActivityCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            val pi = PendingIntent.getBroadcast(
+                context,
+                routine.id,
+                Intent(context, GeofenceBroadcastReceiver::class.java),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            routine.notificationTimes
+                .filter { it.triggerType == TriggerType.LOCATION }
+                .forEach { nt ->
+                    val (lat, lng) = nt.location!!.split(",").map(String::toDouble)
+                    val fence = Geofence.Builder()
+                        .setRequestId(routine.id.toString())
+                        .setCircularRegion(lat, lng, (nt.locationRadius ?: 100).toFloat())
+                        .setExpirationDuration(Geofence.NEVER_EXPIRE)
+                        .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER)
+                        .build()
+                    val request = GeofencingRequest.Builder()
+                        .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER)
+                        .addGeofence(fence)
+                        .build()
+                    geofencingClient.addGeofences(request, pi)
+                }
+        }
+    }
+
+    private fun addRoutineToCalendar(routine: Routine) {
+        val cr = getApplication<Application>().contentResolver
+        val context = getApplication<Application>()
+        val prefs = context
+            .getSharedPreferences("notification_prefs", Context.MODE_PRIVATE)
+        // pick first writable calendar:
+        val calId = cr.query(
+            CalendarContract.Calendars.CONTENT_URI,
+            arrayOf(CalendarContract.Calendars._ID), null, null, null
+        )?.use { if (it.moveToFirst()) it.getLong(0) else return } ?: return
+
+        // build event values
+        val ev = ContentValues().apply {
+            put(CalendarContract.Events.CALENDAR_ID, calId)
+            put(CalendarContract.Events.TITLE, routine.name)
+            put(CalendarContract.Events.DESCRIPTION, routine.description)
+            put(CalendarContract.Events.EVENT_TIMEZONE, TimeZone.getDefault().id)
+            put(CalendarContract.Events.DTSTART, routine.startDate)
+            routine.endDate?.let { put(CalendarContract.Events.DTEND, it) }
+            // weekly RRULE on the selected days
+            if (routine.recurrenceType == RecurrenceType.WEEKLY) {
+                val days = routine.daysOfWeek
+                    .joinToString(",") { listOf("SU","MO","TU","WE","TH","FR","SA")[it-1] }
+                put(CalendarContract.Events.RRULE, "FREQ=WEEKLY;BYDAY=$days")
             }
         }
+        val uri = cr.insert(CalendarContract.Events.CONTENT_URI, ev) ?: return
+        val eventId = uri.lastPathSegment!!.toLong()
+        prefs.edit()
+            .putLong("calendar_event_${routine.id}", eventId)
+            .apply()
+
+        // add a 10‑min reminder
+        ContentValues().apply {
+            put(CalendarContract.Reminders.EVENT_ID, uri.lastPathSegment!!.toLong())
+            put(CalendarContract.Reminders.METHOD, CalendarContract.Reminders.METHOD_ALERT)
+            put(CalendarContract.Reminders.MINUTES, 10)
+        }.let { cr.insert(CalendarContract.Reminders.CONTENT_URI, it) }
     }
 }

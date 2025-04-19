@@ -17,6 +17,16 @@ import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.MapLibreMap
+import android.location.Geocoder
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
+import java.util.Locale
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
@@ -24,21 +34,20 @@ fun MapLibreView(
     modifier: Modifier = Modifier,
     onLocationSelected: (latitude: Double, longitude: Double) -> Unit = { _, _ -> }
 ) {
+    var addressInput by remember { mutableStateOf("") }
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
 
-    // Vérifie la permission d'accès à la localisation.
     val locationPermissionState = rememberPermissionState(permission = Manifest.permission.ACCESS_FINE_LOCATION)
-    // Demande la permission dès que le composable est affiché (si ce n'est pas déjà accordé).
+
     LaunchedEffect(key1 = locationPermissionState.status.isGranted) {
         if (!locationPermissionState.status.isGranted) {
             locationPermissionState.launchPermissionRequest()
         }
     }
 
-    // Stocke la localisation actuelle (null si non disponible ou permission refusée)
     var currentLocation by remember { mutableStateOf<LatLng?>(null) }
 
-    // Récupération de la dernière localisation avec FusedLocationProviderClient
     val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
     LaunchedEffect(locationPermissionState.status.isGranted) {
         if (locationPermissionState.status.isGranted) {
@@ -53,44 +62,84 @@ fun MapLibreView(
         }
     }
 
-    // Création du MapView via AndroidView.
-    Box(modifier = Modifier.fillMaxSize()) {
-        AndroidView(
-            modifier = modifier,
-            factory = { ctx ->
-                val mapView = MapView(ctx).apply {
-                    layoutParams = android.view.ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT)
-                    onCreate(null)
-                    getMapAsync { map: MapLibreMap ->
-                        // Utilise l'URL du style par défaut de MapLibre.
-                        map.setStyle("https://demotiles.maplibre.org/style.json") { style ->
-                            map.addOnMapClickListener { point: LatLng ->
-                                onLocationSelected(point.latitude, point.longitude)
-                                true
+    // Store a reference to MapView
+    var mapViewRef by remember { mutableStateOf<MapView?>(null) }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        OutlinedTextField(
+            value = addressInput,
+            onValueChange = { addressInput = it },
+            label = { Text("Entrez une adresse") },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(8.dp)
+        )
+        Button(
+            onClick = {
+                coroutineScope.launch {
+                    try {
+                        val geocoder = Geocoder(context, Locale.getDefault())
+                        val addresses = geocoder.getFromLocationName(addressInput, 1)
+                        if (!addresses.isNullOrEmpty()) {
+                            val location = LatLng(addresses[0].latitude, addresses[0].longitude)
+                            mapViewRef?.getMapAsync { map ->
+                                map.setCameraPosition(
+                                    CameraPosition.Builder()
+                                        .target(location)
+                                        .zoom(14.0)
+                                        .build()
+                                )
                             }
-                            // Centre la carte sur la position actuelle si disponible, sinon sur Paris.
-                            val center = currentLocation ?: LatLng(48.8566, 2.3522)
-                            map.cameraPosition = CameraPosition.Builder()
-                                .target(center)
-                                .zoom(12.0)
-                                .build()
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            },
+            modifier = Modifier.padding(horizontal = 8.dp)
+        ) {
+            Text("Rechercher")
+        }
+
+        Box(modifier = Modifier.fillMaxSize()) {
+            AndroidView(
+                modifier = modifier,
+                factory = { ctx ->
+                    MapView(ctx).apply {
+                        mapViewRef = this // Save reference
+                        layoutParams = android.view.ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT)
+                        onCreate(null)
+                        getMapAsync { map: MapLibreMap ->
+                            map.setStyle("https://demotiles.maplibre.org/style.json") {
+                                map.addOnMapClickListener { point: LatLng ->
+                                    onLocationSelected(point.latitude, point.longitude)
+                                    true
+                                }
+                                val center = currentLocation ?: LatLng(48.8566, 2.3522)
+                                map.setCameraPosition(
+                                    CameraPosition.Builder()
+                                        .target(center)
+                                        .zoom(12.0)
+                                        .build()
+                                )
+                            }
+                        }
+                    }
+                },
+                update = { mapView ->
+                    mapView.onResume()
+                    currentLocation?.let { loc ->
+                        mapView.getMapAsync { map ->
+                            map.setCameraPosition(
+                                CameraPosition.Builder()
+                                    .target(loc)
+                                    .zoom(12.0)
+                                    .build()
+                            )
                         }
                     }
                 }
-                mapView
-            },
-            update = { mapView ->
-                mapView.onResume()
-                // Si la localisation actuelle est disponible, on recentre éventuellement la carte.
-                currentLocation?.let { loc ->
-                    mapView.getMapAsync { map ->
-                        map.cameraPosition = CameraPosition.Builder()
-                            .target(loc)
-                            .zoom(12.0)
-                            .build()
-                    }
-                }
-            }
-        )
+            )
+        }
     }
 }

@@ -1,8 +1,13 @@
 package com.example.infomobiletp
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.content.pm.PackageManager
+import android.location.Geocoder
 import android.util.Log
+import android.view.ViewGroup
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,10 +21,27 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.consumeAllChanges
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import com.google.android.gms.location.LocationServices
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import org.maplibre.android.geometry.LatLng
+import org.osmdroid.events.MapEventsReceiver
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.MapEventsOverlay
+import java.util.Locale
+
+
 
 @Composable
 fun BatteryLevelPicker(value: Int, range: IntRange, onValueChange: (Int) -> Unit) {
@@ -172,6 +194,28 @@ fun NotificationTimeItem(
 ) {
     var showDialog by remember { mutableStateOf(initiallyOpen) }
     var showMapDialog by remember { mutableStateOf(false) }
+    var addressInput by remember { mutableStateOf("") }
+    val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
+
+    // Charger la position du téléphone une fois (optionnel)
+    var phoneLat by remember { mutableStateOf<Double?>(null) }
+    var phoneLng by remember { mutableStateOf<Double?>(null) }
+    LaunchedEffect(Unit) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            fusedLocationClient.lastLocation.await()?.let {
+                phoneLat = it.latitude
+                phoneLng = it.longitude
+            }
+        }
+    }
+
+    var tempLat by remember { mutableStateOf(phoneLat ?: 48.8566) }
+    var tempLng by remember { mutableStateOf(phoneLng ?: 2.3522) }
+    var locationText by remember { mutableStateOf(initialLocation) }
 
     // Display summary based on the trigger type:
     val displayText = when (initialTrigger) {
@@ -249,42 +293,78 @@ fun NotificationTimeItem(
                         }
                         TriggerType.LOCATION -> {
                             Column {
-                                Button(onClick = { showMapDialog = true }) {
-                                    Text("Choisir un lieu")
-                                }
-                                if (locationText.isNotEmpty()) {
-                                    Text("Lieu sélectionné: $locationText", fontSize = 14.sp)
-                                }
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text("Rayon de déclenchement (m)", fontSize = 16.sp)
-                                BatteryLevelPicker(
-                                    value = locationRadius,
-                                    range = 10..1000,
-                                    onValueChange = { locationRadius = it }
+                                OutlinedTextField(
+                                    value = addressInput,
+                                    onValueChange = { addressInput = it },
+                                    label = { Text("Adresse (optionnel)") },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 8.dp)
                                 )
-                            }
-                            if (showMapDialog) {
-                                AlertDialog(
-                                    onDismissRequest = { showMapDialog = false },
-                                    title = { Text("Sélectionnez une localisation") },
-                                    text = {
-                                        // Integrate MapLibreView for selecting location.
-                                        // Assurez-vous que votre composable MapLibreView est défini dans le projet.
-                                        OSMMapView(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .height(300.dp)
-                                        ) { lat, lng ->
-                                            locationText = "$lat,$lng"
-                                            showMapDialog = false
+                                Button(
+                                    onClick = {
+                                        coroutineScope.launch {
+                                            try {
+                                                val geocoder = Geocoder(context, Locale.getDefault())
+                                                val results = geocoder.getFromLocationName(addressInput, 1)
+                                                results?.firstOrNull()?.let { p ->
+                                                    tempLat = p.latitude
+                                                    tempLng = p.longitude
+                                                    locationText = "${p.latitude},${p.longitude}"
+                                                    showMapDialog = false
+                                                }
+                                            } catch (_: Exception) { }
                                         }
                                     },
-                                    confirmButton = {
-                                        Button(onClick = { showMapDialog = false }) {
-                                            Text("Fermer")
+                                    modifier = Modifier.padding(bottom = 8.dp)
+                                ) {
+                                    Text("Rechercher")
+                                }
+
+                                Button(onClick = { showMapDialog = true }) {
+                                    Text("Ouvrir la Map")
+                                }
+
+                                if (showMapDialog) {
+                                    AlertDialog(
+                                        onDismissRequest = { showMapDialog = false },
+                                        title = { Text("Sélectionner un lieu") },
+                                        text = {
+                                            Box(
+                                                Modifier
+                                                    .fillMaxWidth()
+                                                    .height(200.dp)
+
+                                            ) {
+                                                OSMMapViewWithMarkers(
+                                                    modifier = Modifier.matchParentSize(),
+                                                    phonePoint = phoneLat?.let { GeoPoint(it, phoneLng!!) },
+                                                    selectedPoint = GeoPoint(tempLat, tempLng),
+                                                    onLocationSelected = { lat, lng ->
+                                                        tempLat = lat
+                                                        tempLng = lng
+                                                    }
+                                                )
+                                            }
+                                        },
+                                        confirmButton = {
+                                            Button(onClick = {
+                                                locationText = "$tempLat,$tempLng"
+                                                showMapDialog = false
+                                            }) {
+                                                Text("Enregistrer")
+                                            }
+                                        },
+                                        dismissButton = {
+                                            Button(onClick = { showMapDialog = false }) {
+                                                Text("Annuler")
+                                            }
                                         }
-                                    }
-                                )
+                                    )
+                                }
+
+                                Spacer(Modifier.height(8.dp))
+                                Text("Lieu sélectionné : $locationText")
                             }
                         }
                     }
